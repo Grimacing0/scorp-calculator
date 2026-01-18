@@ -1,12 +1,14 @@
 // comparisonCalculator.ts - Main engine for S-Corp vs Schedule C comparison
 
 import type { TaxYearRules, TaxBracket, FilingStatusType } from '../data';
+import { calculateQBIDeduction as calculateQBI, type QBIResult } from './qbiCalculator';
 
 // Input data for the comparison
 export interface ComparisonInput {
   // Business income
   businessRevenue: number;
   businessExpenses: number;  // Non-wage expenses
+  nonOwnerW2Wages: number;   // W-2 wages paid to employees (not owner)
 
   // S-Corp specific
   ownerSalary: number;       // Reasonable salary for S-Corp scenario
@@ -57,6 +59,7 @@ export interface ScenarioResult {
   agi: number;
   standardOrItemized: number;
   qbiDeduction: number;
+  qbiDetails: QBIResult;         // Detailed QBI calculation info
   totalDeductions: number;
   taxableOrdinaryIncome: number;
 
@@ -150,50 +153,6 @@ function calculateNIIT(
   return taxableAmount * 0.038;
 }
 
-// Calculate QBI deduction
-function calculateQBIDeduction(
-  qbi: number,
-  taxableIncomeBeforeQBI: number,
-  filingStatus: FilingStatusType,
-  isSSTB: boolean,
-  rules: TaxYearRules
-): number {
-  const threshold = rules.qbi.thresholds[filingStatus];
-  const phaseOut = rules.qbi.phaseOutRange[filingStatus];
-
-  // Basic QBI deduction is 20% of QBI
-  let qbiDeduction = qbi * 0.20;
-
-  // But it's also limited to 20% of (taxable income - net capital gains)
-  // For simplicity, using taxable income as proxy
-  const incomeLimit = taxableIncomeBeforeQBI * 0.20;
-  qbiDeduction = Math.min(qbiDeduction, incomeLimit);
-
-  // If below threshold, full deduction regardless of SSTB
-  if (taxableIncomeBeforeQBI <= threshold) {
-    return Math.max(0, qbiDeduction);
-  }
-
-  // If in phase-out range
-  const amountOverThreshold = taxableIncomeBeforeQBI - threshold;
-
-  if (isSSTB) {
-    // SSTB: deduction phases out entirely
-    if (amountOverThreshold >= phaseOut) {
-      return 0; // Completely phased out
-    }
-    // Partial phase-out
-    const phaseOutPercent = amountOverThreshold / phaseOut;
-    return Math.max(0, qbiDeduction * (1 - phaseOutPercent));
-  } else {
-    // Non-SSTB: W-2 wages / capital limits apply (simplified)
-    // Full implementation would need W-2 wages and qualified property basis
-    // For now, returning the basic deduction since most small businesses
-    // won't hit these limits
-    return Math.max(0, qbiDeduction);
-  }
-}
-
 // Get catch-up amount based on age
 function getCatchUpAmount(age: number, rules: TaxYearRules): number {
   if (age >= 60 && age <= 63) {
@@ -213,8 +172,8 @@ function calculateScheduleC(
   const ret = rules.retirement;
   const fs = rules.filingStatuses[input.filingStatus];
 
-  // Net profit from Schedule C
-  const netProfit = input.businessRevenue - input.businessExpenses;
+  // Net profit from Schedule C (after non-owner wages)
+  const netProfit = input.businessRevenue - input.businessExpenses - input.nonOwnerW2Wages;
 
   // SE income base (92.35% of net profit)
   const seIncome = netProfit * se.seIncomeMultiplier;
@@ -283,17 +242,22 @@ function calculateScheduleC(
     ? fs.standardDeduction
     : input.itemizedDeductions;
 
-  // QBI deduction (Schedule C income qualifies)
-  const qbiBeforeDeduction = netProfit - seDeduction - retirementDeduction;
+  // QBI deduction using the proper Form 8995/8995-A logic
+  // For Schedule C: QBI = net profit minus adjustments allocated to the business
+  // Business W-2 wages = non-owner wages paid (owner has no W-2 in Schedule C)
+  const qbiAmount = netProfit - seDeduction - retirementDeduction;
   const taxableBeforeQBI = agi - standardOrItemized;
-  const qbiDeduction = calculateQBIDeduction(
-    qbiBeforeDeduction,
-    taxableBeforeQBI,
-    input.filingStatus,
-    input.isSSTB,
-    rules
-  );
 
+  const qbiDetails = calculateQBI({
+    qbi: qbiAmount,
+    businessW2Wages: input.nonOwnerW2Wages,  // Only non-owner wages count for QBI W-2 limit
+    taxableIncomeBeforeQBI: taxableBeforeQBI,
+    netCapitalGains: input.capitalGains,
+    filingStatus: input.filingStatus,
+    isSSTB: input.isSSTB,
+  }, rules);
+
+  const qbiDeduction = qbiDetails.deduction;
   const totalDeductions = standardOrItemized + qbiDeduction;
 
   // Taxable income
@@ -344,6 +308,7 @@ function calculateScheduleC(
     agi,
     standardOrItemized,
     qbiDeduction,
+    qbiDetails,
     totalDeductions,
     taxableOrdinaryIncome,
 
@@ -379,7 +344,10 @@ function calculateSCorp(
   // S-Corp: Owner takes salary as W-2 wages
   const ownerSalary = input.ownerSalary;
 
-  // Employer FICA (6.2% SS + 1.45% Medicare)
+  // Total business W-2 wages (owner + non-owner employees)
+  const totalBusinessW2 = ownerSalary + input.nonOwnerW2Wages;
+
+  // Employer FICA on owner's salary (6.2% SS + 1.45% Medicare)
   const employerSSRate = se.socialSecurityRate / 2;  // 6.2%
   const employerMedRate = se.medicareRate / 2;       // 1.45%
 
@@ -388,13 +356,14 @@ function calculateSCorp(
   const employerMed = ownerSalary * employerMedRate;
   const employerFICA = employerSS + employerMed;
 
-  // Business profit after wages and employer FICA
-  const netBusinessIncome = input.businessRevenue - input.businessExpenses - ownerSalary - employerFICA;
+  // Business profit after all wages and employer FICA
+  const netBusinessIncome = input.businessRevenue - input.businessExpenses -
+    totalBusinessW2 - employerFICA;
 
   // S-Corp distributions (passed through to owner)
   const distributions = Math.max(0, netBusinessIncome);
 
-  // Total W-2 wages (owner salary + other)
+  // Total W-2 wages for the taxpayer (owner salary + other personal W-2)
   const totalW2 = ownerSalary + input.otherW2Wages;
 
   // Employee FICA on owner's salary
@@ -429,11 +398,7 @@ function calculateSCorp(
     ? Math.min(input.traditionalContribution, maxTotal)
     : maxTotal;
 
-  // Employer's contribution is a business expense (already included in net calc)
-  // The employee deferral reduces W-2 for income tax purposes but not FICA
-
-  // Health insurance - for S-Corp >2% shareholders, health insurance is W-2 income
-  // but also deductible above the line. Net effect is same as Schedule C.
+  // Health insurance deduction
   const healthInsuranceDeduction = input.selfEmployedHealthInsurance;
 
   // Other income
@@ -454,19 +419,22 @@ function calculateSCorp(
     ? fs.standardDeduction
     : input.itemizedDeductions;
 
-  // QBI deduction - S-Corp distributions qualify
-  // QBI = net business income (distributions + reasonable salary portion for QBI purposes)
-  // Actually, for S-Corp, QBI is generally the distributions (pass-through income)
+  // QBI deduction using proper Form 8995/8995-A logic
+  // For S-Corp: QBI = distributions (pass-through income)
+  // Business W-2 wages = total wages paid by the S-Corp (owner + employees)
   const qbiAmount = distributions;
   const taxableBeforeQBI = agi - standardOrItemized;
-  const qbiDeduction = calculateQBIDeduction(
-    qbiAmount,
-    taxableBeforeQBI,
-    input.filingStatus,
-    input.isSSTB,
-    rules
-  );
 
+  const qbiDetails = calculateQBI({
+    qbi: qbiAmount,
+    businessW2Wages: totalBusinessW2,  // All W-2 wages paid by S-Corp count
+    taxableIncomeBeforeQBI: taxableBeforeQBI,
+    netCapitalGains: input.capitalGains,
+    filingStatus: input.filingStatus,
+    isSSTB: input.isSSTB,
+  }, rules);
+
+  const qbiDeduction = qbiDetails.deduction;
   const totalDeductions = standardOrItemized + qbiDeduction;
 
   // Taxable income
@@ -482,7 +450,7 @@ function calculateSCorp(
     rules.capitalGainsBrackets[input.filingStatus]
   );
 
-  // NIIT - distributions are NOT investment income, but dividends/interest/cap gains are
+  // NIIT - distributions are NOT investment income
   const investmentIncome = input.capitalGains + input.dividendIncome + input.interestIncome;
   const niit = calculateNIIT(agi, investmentIncome, rules.niitThresholds[input.filingStatus]);
 
@@ -492,7 +460,7 @@ function calculateSCorp(
   const amtThreshold = rules.additionalMedicareTaxThresholds[input.filingStatus];
   const additionalMedicareTax = Math.max(0, totalW2 - amtThreshold) * se.additionalMedicareRate;
 
-  // Total payroll tax (employee portion only; employer is business expense)
+  // Total payroll tax (employee portion only)
   const totalPayrollTax = socialSecurityTax + medicareTax + additionalMedicareTax;
 
   // Total federal tax (employee side)
@@ -516,6 +484,7 @@ function calculateSCorp(
     agi,
     standardOrItemized,
     qbiDeduction,
+    qbiDetails,
     totalDeductions,
     taxableOrdinaryIncome,
 
@@ -548,7 +517,6 @@ export function calculateComparison(
   const sCorp = calculateSCorp(input, rules);
 
   // For true comparison, include employer FICA as a "cost" of S-Corp
-  // since it's money that could have been distributed
   const sCorpTotalCost = sCorp.totalFederalTax + sCorp.employerFICA;
   const scheduleCTotalCost = scheduleC.totalFederalTax;
 

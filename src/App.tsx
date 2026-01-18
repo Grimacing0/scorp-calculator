@@ -102,6 +102,7 @@ function App() {
   // Business inputs
   const [businessRevenue, setBusinessRevenue] = useState(400000);
   const [businessExpenses, setBusinessExpenses] = useState(50000);
+  const [nonOwnerW2Wages, setNonOwnerW2Wages] = useState(0);
   const [ownerSalary, setOwnerSalary] = useState(100000);
 
   // Other income
@@ -133,6 +134,7 @@ function App() {
   const input: ComparisonInput = useMemo(() => ({
     businessRevenue,
     businessExpenses,
+    nonOwnerW2Wages,
     ownerSalary,
     otherW2Wages,
     dividendIncome,
@@ -149,7 +151,7 @@ function App() {
     traditionalContribution,
     selfEmployedHealthInsurance,
   }), [
-    businessRevenue, businessExpenses, ownerSalary, otherW2Wages,
+    businessRevenue, businessExpenses, nonOwnerW2Wages, ownerSalary, otherW2Wages,
     dividendIncome, interestIncome, capitalGains, retirementIncome,
     socialSecurityIncome, otherIncome, filingStatus, useStandardDeduction,
     itemizedDeductions, age, isSSTB, traditionalContribution, selfEmployedHealthInsurance
@@ -231,7 +233,13 @@ function App() {
               label="Business Expenses"
               value={businessExpenses}
               onChange={setBusinessExpenses}
-              help="Non-wage business expenses"
+              help="Non-wage operating expenses"
+            />
+            <InputField
+              label="Employee Wages (Non-Owner)"
+              value={nonOwnerW2Wages}
+              onChange={setNonOwnerW2Wages}
+              help="W-2 wages paid to employees (affects QBI limit)"
             />
             <InputField
               label="S-Corp Owner Salary"
@@ -240,7 +248,7 @@ function App() {
               help="Reasonable compensation for S-Corp scenario"
             />
             <div className="calculated-value">
-              Net Business Income: {formatCurrency(businessRevenue - businessExpenses)}
+              Net Business Income: {formatCurrency(businessRevenue - businessExpenses - nonOwnerW2Wages)}
             </div>
           </div>
 
@@ -390,15 +398,66 @@ function App() {
             ]}
           />
 
-          <ResultsSection
-            title="Deductions"
-            rows={[
-              { label: "Standard/Itemized", scheduleC: scheduleC.standardOrItemized, sCorp: sCorp.standardOrItemized },
-              { label: "QBI Deduction", scheduleC: scheduleC.qbiDeduction, sCorp: sCorp.qbiDeduction },
-              { label: "Total Deductions", scheduleC: scheduleC.totalDeductions, sCorp: sCorp.totalDeductions, isTotal: true },
-              { label: "Taxable Income", scheduleC: scheduleC.taxableOrdinaryIncome, sCorp: sCorp.taxableOrdinaryIncome, isTotal: true },
-            ]}
-          />
+          <div className="results-section">
+            <h3>QBI Deduction</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Schedule C</th>
+                  <th>S-Corp</th>
+                </tr>
+              </thead>
+              <tbody>
+                <ResultRow
+                  label="Standard/Itemized"
+                  scheduleC={scheduleC.standardOrItemized}
+                  sCorp={sCorp.standardOrItemized}
+                />
+                <ResultRow
+                  label="QBI Deduction"
+                  scheduleC={scheduleC.qbiDeduction}
+                  sCorp={sCorp.qbiDeduction}
+                />
+                <tr>
+                  <td>Form Used</td>
+                  <td className="number">{scheduleC.qbiDetails.useForm8995A ? '8995-A' : '8995'}</td>
+                  <td className="number">{sCorp.qbiDetails.useForm8995A ? '8995-A' : '8995'}</td>
+                </tr>
+                <tr>
+                  <td>Limiting Factor</td>
+                  <td className="number" style={{ fontSize: '0.8rem' }}>{scheduleC.qbiDetails.limitingFactor}</td>
+                  <td className="number" style={{ fontSize: '0.8rem' }}>{sCorp.qbiDetails.limitingFactor}</td>
+                </tr>
+                {(scheduleC.qbiDetails.useForm8995A || sCorp.qbiDetails.useForm8995A) && (
+                  <>
+                    <ResultRow
+                      label="20% of QBI"
+                      scheduleC={scheduleC.qbiDetails.qbiComponent}
+                      sCorp={sCorp.qbiDetails.qbiComponent}
+                    />
+                    <ResultRow
+                      label="50% W-2 Wage Limit"
+                      scheduleC={scheduleC.qbiDetails.wageLimit}
+                      sCorp={sCorp.qbiDetails.wageLimit}
+                    />
+                  </>
+                )}
+                <ResultRow
+                  label="Total Deductions"
+                  scheduleC={scheduleC.totalDeductions}
+                  sCorp={sCorp.totalDeductions}
+                  isTotal
+                />
+                <ResultRow
+                  label="Taxable Income"
+                  scheduleC={scheduleC.taxableOrdinaryIncome}
+                  sCorp={sCorp.taxableOrdinaryIncome}
+                  isTotal
+                />
+              </tbody>
+            </table>
+          </div>
 
           <ResultsSection
             title="Income Taxes"
