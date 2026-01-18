@@ -164,6 +164,20 @@ function App() {
 
   const { scheduleC, sCorp, savings } = result;
 
+  // Calculate optimal QBI wages using the 2/7 rule
+  // Formula: Optimal Wages = (2/7) × Business Income - Non-Owner Wages
+  // This equalizes 20% of QBI with 50% of W-2 wages
+  const netBusinessIncome = businessRevenue - businessExpenses;
+  const optimalTotalWages = (2 / 7) * netBusinessIncome;
+  const optimalOwnerWages = Math.max(0, optimalTotalWages - nonOwnerW2Wages);
+
+  // QBI threshold for the filing status
+  const qbiThreshold = rules.qbi.thresholds[filingStatus];
+
+  // Only show the 2/7 rule when income is likely above QBI threshold
+  // and business is not an SSTB (where QBI phases out entirely)
+  const showQbiOptimization = !isSSTB && sCorp.agi > qbiThreshold;
+
   return (
     <div className="app">
       <header>
@@ -250,6 +264,18 @@ function App() {
             <div className="calculated-value">
               Net Business Income: {formatCurrency(businessRevenue - businessExpenses - nonOwnerW2Wages)}
             </div>
+            {showQbiOptimization && (
+              <div className="info-note">
+                <div className="info-note-header">QBI Optimization (2/7 Rule)</div>
+                <div className="info-note-value">
+                  Optimal Owner Salary: {formatCurrency(optimalOwnerWages)}
+                </div>
+                <div className="info-note-detail">
+                  Above the QBI threshold, set wages to 2/7 of business income to maximize the QBI deduction.
+                  This equalizes the 20% QBI deduction with the 50% W-2 wage limit.
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="input-section">
