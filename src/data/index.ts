@@ -10,8 +10,17 @@ export const taxYears: Record<number, TaxYearRules> = {
   2025: rules2025,
 };
 
-// Helper to get available years for dropdown
-export const availableYears = Object.keys(taxYears).map(Number);
+// Helper to get available years for dropdown (sorted descending, newest first)
+export const availableYears = Object.keys(taxYears).map(Number).sort((a, b) => b - a);
 
 // Export types for use in other files
-export type { TaxYearRules, TaxBracket, FilingStatus } from './types';
+export type {
+  TaxYearRules,
+  TaxBracket,
+  FilingStatus,
+  FilingStatusType,
+  SelfEmploymentRules,
+  AdditionalMedicareTaxThresholds,
+  RetirementLimits,
+  QBILimits,
+} from './types';
