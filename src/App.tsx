@@ -521,6 +521,13 @@ function App() {
           This calculator provides estimates for educational purposes only.
           Consult a qualified tax professional for advice specific to your situation.
         </p>
+        <p className="footer-links">
+          <a href="https://tally.so/r/lbOxM6" target="_blank" rel="noopener noreferrer">Give Feedback</a>
+          {' | '}
+          <a href="https://github.com/Grimacing0/scorp-calculator/issues" target="_blank" rel="noopener noreferrer">Report Issue</a>
+          {' | '}
+          <a href="https://github.com/Grimacing0/scorp-calculator" target="_blank" rel="noopener noreferrer">View Source</a>
+        </p>
       </footer>
     </div>
   );
